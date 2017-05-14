@@ -3,6 +3,15 @@ import pickle
 import os
 #from matplotlib import pyplot as plt
 
+
+
+def droplist(listy,i):
+	"Drops ith element from a list"
+	return listy[:i]+listy[i+1:] 
+
+
+		
+
 class Pigs(object):
 
 	# stick:0
@@ -11,12 +20,12 @@ class Pigs(object):
 	
 	# state = (score,current_player,turns_left,p_0,...,p_{n-1})
 	
-	def __init__(self,n_players,max_score=100,n_turns=2):
+	def __init__(self,n_players=3,max_score=100,n_turns=3):
 			
 		self.max_score=max_score
 		self.n_turns = n_turns
 		self.n = n_players
-		self.filename = 'V-'+str(max_score)+'-'+str(n_turns)+'.pickle'
+		self.filename = str(n_players)+'-'+str(max_score)+'V'+str(n_turns)
 		self.n_comps = 0
 		
 		# game information
@@ -45,62 +54,72 @@ class Pigs(object):
 		])
 		self.probs = self.probs/sum(self.probs)
 		
-		self.max_1 = self.n**3-self.n**2
-		self.max_2 = 1
-		for i in range(1,self.n_turns+1):
-			self.max_2 += (i*self.max_score)**(self.n-1)
-		self.shape = (self.max_score+1,self.max_1,self.max_2)
 		
-		print 'array shape ',self.shape
-		print 'memory used ',self.shape[0]*self.shape[1]*self.shape[2]
 		
-		if os.path.isfile(self.filename):
-			print 'loading...'
-			with open(self.filename,'rb') as f:
-				self.V_cache = pickle.load(f)
-			print 'done.'
-		else:			
-			self.V_cache = np.full(self.shape,None,dtype=float)	
+		max_2 = self.n*self.max_score
 		
+		for i in range(self.n_turns):
+			print 'array ', self.n_turns, '-', (i+1)
+			a = (self.n_turns-i+1)*self.max_score
+			b = a - self.max_score
+			list_1 = [(self.n-i) * b**(self.n-i-1) * a**i + i * b**(self.n-i) * a**(i-1) for i in range(self.n)]
+			max_1 = sum(list_1)
+			shape = (int(max_1),max_2)
+			print 'array shape ',shape
+			filename = self.filename+'-'+str(i+1)+'.pickle'
+			
+			if os.path.isfile(filename):
+				print 'loading...'
+				with open(filename,'rb') as f:
+					setattr(self, 'V'+str(i+1), pickle.load(f))
+				print 'done.'
+			else:
+				print 'creating...'
+				setattr(self, 'V'+str(i+1), np.full(shape,None,dtype=float))
+						
+			print 'memory ',shape[0]*shape[1]
 	
 	def encode(self,player,state):
+		# if it works this process could be improved, the counting up feels messy
 		score = state[0]
 		current_player = state[1]
 		turns_left = state[2]-1
 		totals = state[3:]
 		
-		# encode the totals
-		
-		# first subtract minimum
+		ix_1 = 0
+		b = (self.n_turns-turns_left)*self.max_score # maximum score at beginning
+		a = b + self.max_score
+		totals_range = self.n*[b]
+		for i in range(current_player):
+			totals_range[i] += self.max_score
+			# count digits passed
+			ix_1 += (self.n-i) * b**(self.n-i-1) * a**i + i * b**(self.n-i) * a**(i-1)
+	
+		# subtract minimum
 		min_t = min(totals)
 		min_p = np.argmin(totals)
-		totals = [t - min_t for t in totals[:min_p]+totals[min_p+1:]]
+		totals = [t - min_t for t in droplist(totals,min_p)]
+		totals_range = droplist(totals_range,min_p)
 		
-		# then weight
-		ix_2 = 0
-		for i in range(turns_left):
-			ix_2 += ((self.n_turns-i)*self.max_score)**(self.n-1)
+		# count digits passed
+		p = 0
+		for i in range(min_p):
+			p += totals_range[i]
+		p *= a**(current_player-1) * b**(self.n-current_player-1)
+		ix_1 += p
 		
-		weights = [
-			(self.n_turns*(self.max_score-turns_left))**i
-			for i in range(self.n-1)
-		]
-		weighted_totals = [totals[i]*weights[i] for i in range(self.n-1)]
-		ix_2 += sum(weighted_totals)
+		# calculcate weights
+		weights = (self.n-1)*[1]
+		for i in range(1,self.n-1):
+			weights[i:] = [p*totals_range[i] for p in weights[i:]]
+		totals_weighted = [totals[i]*weights[i] for i in range(self.n-1)]
+		ix_1 += sum(totals_weighted)
 		
-		# second encode player,current_player,min_p
-		ix_1 = min_p + self.n*current_player + self.n**2 * player
+		weights = [1, self.max_score]
+		ix_2 = score + player*self.max_score
 		
-		ix = (int(score),int(ix_1),int(ix_2))
+		return (turns_left,ix_1,ix_2)
 		
-		try:
-			self.V_cache[ix]
-		except IndexError:
-			print ix
-			raise IndexError
-		
-		return ix
-	
 	def twist(self,state,points):
 		"Returns state after twist"
 		next_state = list(state)
@@ -191,9 +210,6 @@ class Pigs(object):
 		return states,probs
 	
 	def V(self,player,state):
-		if state[2]==-1:
-			print state
-			raise IndexError('turns_left = -1')
 		
 		if state[2] == 0:
 			# its terminal
@@ -217,8 +233,10 @@ class Pigs(object):
 		else: 
 			# we compute fully
 			ix = self.encode(player,state)		
-			 
-			if np.isnan(self.V_cache[ix]):
+			turns_left = state[2]
+			V = getattr(self,'V'+str(turns_left))
+			
+			if np.isnan(V[ix]):
 				ER = 0
 				states,probs = self.next_step(state)
 				n = len(states)
@@ -228,10 +246,10 @@ class Pigs(object):
 					R = self.V(player,s)
 					ER += p*R
 					
-				self.V_cache[ix] = ER
+				V[ix] = ER
 				self.n_comps += 1
 			
-			return self.V_cache[ix]		
+			return V[ix]		
 		
 	def plotty(self,player,turns_left,totals,x_min=0,x_max=41):
 		X = [x for x in range(x_min,x_max)]
@@ -254,20 +272,23 @@ class Pigs(object):
 		self.save()
 	
 	def save(self):
-		print 'saving...'
-		with open(self.filename,'wb') as f:
-			pickle.dump(self.V_cache,f,protocol=pickle.HIGHEST_PROTOCOL)
-		print 'done.'
+		for i in range(self.n_turns):
+			print 'array ', self.n_turns, '-', (i+1)
+			print 'saving...'
+			filename = self.filename+'-'+str(i+1)+'.pickle'
+			with open(filename,'wb') as f:
+				pickle.dump(getattr(self,'V'+str(i+1)),f,protocol=pickle.HIGHEST_PROTOCOL)
+			print 'done.'
 		
 if __name__ == "__main__":
 		
-	pigs = Pigs(3)
-	totals = (0,0,0)
+	pigs = Pigs(3,n_turns=1)
+	totals = (10,10,10)
 	score = 0
-	player = 0
+	player = 2
 	turns_left = 1
 
-	state = (0,0,1,10,10,10)
+	state = (score,player,turns_left,) + totals
 	
 	# state = (score,current_player,turns_left,p_0,...,p_{n-1})
 	
