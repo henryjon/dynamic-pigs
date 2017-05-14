@@ -3,14 +3,15 @@ import pickle
 import os
 #from matplotlib import pyplot as plt
 
-
-
 def droplist(listy,i):
 	"Drops ith element from a list"
 	return listy[:i]+listy[i+1:] 
 
-
-		
+def product(listy):
+	p = 1
+	for i in listy:
+		p*= i
+	return p		
 
 class Pigs(object):
 
@@ -58,26 +59,28 @@ class Pigs(object):
 		
 		max_2 = self.n*self.max_score
 		
-		for i in range(self.n_turns):
-			print 'array ', self.n_turns, '-', (i+1)
-			a = (self.n_turns-i+1)*self.max_score
+		for t in range(1,self.n_turns+1):
+		
+			print 'array ', self.n_turns, '-', (t)
+			
+			a = (self.n_turns-t+1)*self.max_score
 			b = a - self.max_score
 			list_1 = [(self.n-i) * b**(self.n-i-1) * a**i + i * b**(self.n-i) * a**(i-1) for i in range(self.n)]
 			max_1 = sum(list_1)
 			shape = (int(max_1),max_2)
 			print 'array shape ',shape
-			filename = self.filename+'-'+str(i+1)+'.pickle'
+			filename = self.filename+'-'+str(t)+'.pickle'
 			
 			if os.path.isfile(filename):
 				print 'loading...'
 				with open(filename,'rb') as f:
-					setattr(self, 'V'+str(i+1), pickle.load(f))
+					setattr(self, 'V'+str(t), pickle.load(f))
 				print 'done.'
 			else:
 				print 'creating...'
-				setattr(self, 'V'+str(i+1), np.full(shape,None,dtype=float))
-						
+				setattr(self, 'V'+str(t), np.full(shape,None,dtype=float))		
 			print 'memory ',shape[0]*shape[1]
+			print '\n'
 	
 	def encode(self,player,state):
 		# if it works this process could be improved, the counting up feels messy
@@ -87,38 +90,37 @@ class Pigs(object):
 		totals = state[3:]
 		
 		ix_1 = 0
-		b = (self.n_turns-turns_left)*self.max_score # maximum score at beginning
+		b = (self.n_turns-turns_left-1)*self.max_score # maximum score at beginning
 		a = b + self.max_score
+		
 		totals_range = self.n*[b]
 		for i in range(current_player):
 			totals_range[i] += self.max_score
+		
 			# count digits passed
 			ix_1 += (self.n-i) * b**(self.n-i-1) * a**i + i * b**(self.n-i) * a**(i-1)
-	
+
 		# subtract minimum
 		min_t = min(totals)
 		min_p = np.argmin(totals)
 		totals = [t - min_t for t in droplist(totals,min_p)]
-		totals_range = droplist(totals_range,min_p)
 		
 		# count digits passed
-		p = 0
+		
 		for i in range(min_p):
-			p += totals_range[i]
-		p *= a**(current_player-1) * b**(self.n-current_player-1)
-		ix_1 += p
+			ix_1 += product(droplist(totals_range,i))
 		
 		# calculcate weights
+		droplist(totals_range,min_p)
 		weights = (self.n-1)*[1]
-		for i in range(1,self.n-1):
-			weights[i:] = [p*totals_range[i] for p in weights[i:]]
+		weights[:self.n-2] = [p*totals_range[self.n-2] for p in weights[:self.n-2]]
 		totals_weighted = [totals[i]*weights[i] for i in range(self.n-1)]
 		ix_1 += sum(totals_weighted)
 		
 		weights = [1, self.max_score]
 		ix_2 = score + player*self.max_score
 		
-		return (turns_left,ix_1,ix_2)
+		return (int(ix_1),int(ix_2))
 		
 	def twist(self,state,points):
 		"Returns state after twist"
@@ -170,7 +172,7 @@ class Pigs(object):
 			p = probs[i]
 			R = self.V(player,s)
 			ER += p*R
-		
+	
 		return ER
 	
 	def greedy(self,state):
@@ -246,6 +248,7 @@ class Pigs(object):
 					R = self.V(player,s)
 					ER += p*R
 					
+				
 				V[ix] = ER
 				self.n_comps += 1
 			
@@ -272,28 +275,28 @@ class Pigs(object):
 		self.save()
 	
 	def save(self):
-		for i in range(self.n_turns):
-			print 'array ', self.n_turns, '-', (i+1)
+		for t in range(1,self.n_turns+1):
+			print 'array ', self.n_turns, '-', t
 			print 'saving...'
-			filename = self.filename+'-'+str(i+1)+'.pickle'
+			filename = self.filename+'-'+str(t)+'.pickle'
 			with open(filename,'wb') as f:
-				pickle.dump(getattr(self,'V'+str(i+1)),f,protocol=pickle.HIGHEST_PROTOCOL)
+				pickle.dump(getattr(self,'V'+str(t)),f,protocol=pickle.HIGHEST_PROTOCOL)
 			print 'done.'
 		
 if __name__ == "__main__":
-		
-	pigs = Pigs(3,n_turns=1)
-	totals = (10,10,10)
+
+	pigs = Pigs(3,n_turns=2)
+	totals = (0,0,0)
 	score = 0
-	player = 2
+	player = 0
 	turns_left = 1
 
 	state = (score,player,turns_left,) + totals
 	
 	# state = (score,current_player,turns_left,p_0,...,p_{n-1})
-	
+
 	print 'stick ', pigs.Q(state,0)
 	print 'twist ', pigs.Q(state,1)
 	print 'computations ', pigs.n_comps
-
+	
 	pigs.save()
