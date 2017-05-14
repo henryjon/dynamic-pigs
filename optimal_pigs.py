@@ -8,17 +8,18 @@ class Pigs(object):
 	# stick:0
 	# twist:1
 	
-	# Each player must bank at a score of 200
 	
 	# state = (score,current_player,turns_left,p_0,...,p_{n-1})
 	
-	def __init__(self,n_players,max_score=100):
+	def __init__(self,n_players,max_score=100,n_turns=2):
 			
 		self.max_score=max_score
-		self.filename = 'V' + str(max_score) + '.pickle'
+		self.n_turns = n_turns
+		self.n = n_players
+		self.filename = 'V-'+str(max_score)+'-'+str(n_turns)+'.pickle'
 		self.n_comps = 0
-		# there are 9 rolls
 		
+		# game information
 		self.rolls = np.array([
 			float('nan'),
 			5,
@@ -30,7 +31,7 @@ class Pigs(object):
 			60,
 			25
 		])
-		
+		self.n_rolls = len(self.rolls)
 		self.probs = np.array([
 			0.21117594565, #nan
 			0.292173675956+0.114782515554, #5
@@ -44,15 +45,61 @@ class Pigs(object):
 		])
 		self.probs = self.probs/sum(self.probs)
 		
-		self.n = n_players
+		self.max_1 = self.n**3-self.n**2
+		self.max_2 = 1
+		for i in range(1,self.n_turns+1):
+			self.max_2 += (i*self.max_score)**(self.n-1)
+		self.shape = (self.max_score+1,self.max_1,self.max_2)
+		
+		print 'array shape ',self.shape
+		print 'memory used ',self.shape[0]*self.shape[1]*self.shape[2]
+		
 		if os.path.isfile(self.filename):
 			print 'loading...'
 			with open(self.filename,'rb') as f:
 				self.V_cache = pickle.load(f)
 			print 'done.'
-		else:
-			self.V_cache = {}
+		else:			
+			self.V_cache = np.full(self.shape,None,dtype=float)	
+		
 	
+	def encode(self,player,state):
+		score = state[0]
+		current_player = state[1]
+		turns_left = state[2]-1
+		totals = state[3:]
+		
+		# encode the totals
+		
+		# first subtract minimum
+		min_t = min(totals)
+		min_p = np.argmin(totals)
+		totals = [t - min_t for t in totals[:min_p]+totals[min_p+1:]]
+		
+		# then weight
+		ix_2 = 0
+		for i in range(turns_left):
+			ix_2 += ((self.n_turns-i)*self.max_score)**(self.n-1)
+		
+		weights = [
+			(self.n_turns*(self.max_score-turns_left))**i
+			for i in range(self.n-1)
+		]
+		weighted_totals = [totals[i]*weights[i] for i in range(self.n-1)]
+		ix_2 += sum(weighted_totals)
+		
+		# second encode player,current_player,min_p
+		ix_1 = min_p + self.n*current_player + self.n**2 * player
+		
+		ix = (int(score),int(ix_1),int(ix_2))
+		
+		try:
+			self.V_cache[ix]
+		except IndexError:
+			print ix
+			raise IndexError
+		
+		return ix
 	
 	def twist(self,state,points):
 		"Returns state after twist"
@@ -72,6 +119,8 @@ class Pigs(object):
 			# add points to score
 			player = state[1]
 			next_state[0] += points
+			# truncate at maximum score
+			next_state[0] = min(next_state[0],self.max_score)
 			
 		return tuple(next_state)
 	
@@ -100,7 +149,7 @@ class Pigs(object):
 		for i in range(n):
 			s = states[i]
 			p = probs[i]
-			R = self.returns(player,s)
+			R = self.V(player,s)
 			ER += p*R
 		
 		return ER
@@ -132,7 +181,7 @@ class Pigs(object):
 			probs.append(1)
 		else:
 			# a = 1
-			for i in range(9):
+			for i in range(self.n_rolls):
 				roll = self.rolls[i]
 				p = self.probs[i]
 				s = self.twist(state,roll)
@@ -140,8 +189,12 @@ class Pigs(object):
 				probs.append(p)
 		
 		return states,probs
+	
+	def V(self,player,state):
+		if state[2]==-1:
+			print state
+			raise IndexError('turns_left = -1')
 		
-	def returns(self,player,state):
 		if state[2] == 0:
 			# its terminal
 			totals = state[3:]
@@ -152,56 +205,33 @@ class Pigs(object):
 				return 1.0/len(win_players)
 			else:
 				return 0
-		else:
-			return self.V(player,state)
-	
-	def V(self,player,state):
 		
 		# use that the sum over players = 1
-		if player == 0:
+		elif player == self.n-1:
 			ER = 0
-			for i in range(1,self.n):
+			for i in range(0,self.n-1):
 				ER += self.V(i,state)
 			ER = 1 - ER
 			return ER
 		
-		# subtract the minimum total
-		totals = state[3:]
-		min_t = min(totals)
-		state = list(state)
-		state[3:] = [t - min_t for t in state[3:]]
-		state = tuple(state)
-			
-		ix = (player,) + state
-		# value according to the player 
-		if not ix in self.V_cache:
-			self.n_comps += 1
-			ER = 0
-			if state[2] == 0:
-				# terminal 
-				ER = self.returns(player,state)
-			else:
+		else: 
+			# we compute fully
+			ix = self.encode(player,state)		
+			 
+			if np.isnan(self.V_cache[ix]):
+				ER = 0
 				states,probs = self.next_step(state)
 				n = len(states)
 				for i in range(n):
 					s = states[i]
 					p = probs[i]
-					R = self.returns(player,s)
+					R = self.V(player,s)
 					ER += p*R
 					
-			self.V_cache[ix] = ER
+				self.V_cache[ix] = ER
+				self.n_comps += 1
 			
-		return self.V_cache[ix]
-		
-	
-		
-	def printy(self,state):
-			
-		print 'player:          ',state[1]
-		print 'score:           ',state[0]	
-		print 'remaining turns: ',state[2]
-		print 'scores:          ',state[3:]
-		
+			return self.V_cache[ix]		
 		
 	def plotty(self,player,turns_left,totals,x_min=0,x_max=41):
 		X = [x for x in range(x_min,x_max)]
@@ -232,13 +262,17 @@ class Pigs(object):
 if __name__ == "__main__":
 		
 	pigs = Pigs(3)
+	totals = (0,0,0)
+	score = 0
+	player = 0
+	turns_left = 1
 
 	state = (0,0,1,10,10,10)
 	
 	# state = (score,current_player,turns_left,p_0,...,p_{n-1})
 	
-	print 'Stick: ', pigs.Q(state,0)
-	print 'Twist: ', pigs.Q(state,1)
-	print 'Computations: ', pigs.n_comps
+	print 'stick ', pigs.Q(state,0)
+	print 'twist ', pigs.Q(state,1)
+	print 'computations ', pigs.n_comps
 
 	pigs.save()
