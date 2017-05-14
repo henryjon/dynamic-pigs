@@ -59,9 +59,11 @@ class Pigs(object):
 		
 		max_2 = self.n*self.max_score
 		
+		memory = 0
+		
 		for t in range(1,self.n_turns+1):
 		
-			print 'array ', self.n_turns, '-', (t)
+			print 'array ',str(self.n_turns),'-',str(t)
 			
 			a = (self.n_turns-t+1)*self.max_score
 			b = a - self.max_score
@@ -79,11 +81,15 @@ class Pigs(object):
 			else:
 				print 'creating...'
 				setattr(self, 'V'+str(t), np.full(shape,None,dtype=float))		
-			print 'memory ',shape[0]*shape[1]
+			memory += shape[0]*shape[1]
 			print '\n'
+		
+		print 'memory ',memory
 	
 	def encode(self,player,state):
-		# if it works this process could be improved, the counting up feels messy
+		# needs tidying and optimising
+		# still can't find the argmax
+		
 		score = state[0]
 		current_player = state[1]
 		turns_left = state[2]-1
@@ -276,7 +282,7 @@ class Pigs(object):
 	
 	def save(self):
 		for t in range(1,self.n_turns+1):
-			print 'array ', self.n_turns, '-', t
+			print 'array ',str(self.n_turns),'-',str(t)
 			print 'saving...'
 			filename = self.filename+'-'+str(t)+'.pickle'
 			with open(filename,'wb') as f:
